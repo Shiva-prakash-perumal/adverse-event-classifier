@@ -31,7 +31,6 @@ FEATURE_COLS = [
     "age",
     "weight_kg",
     "dosage_mg",
-    "time_to_onset_days",
     "num_concomitant_drugs",
     "symptom_count",
     "has_comorbidity",
@@ -80,9 +79,6 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     df["age"] = df["age"].clip(0, 120)
     df["weight_kg"] = df["weight_kg"].clip(20, 300)
     df["dosage_mg"] = df["dosage_mg"].clip(0, 10000)
-    if "time_to_onset_days" not in df.columns:
-        df["time_to_onset_days"] = 0.0  # default
-    df["time_to_onset_days"] = df["time_to_onset_days"].clip(0, 365)
 
     logger.info(f"Cleaned data shape: {df.shape}")
     return df
@@ -127,11 +123,13 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df["is_serious_ae"] = df["adverse_event"].isin(SERIOUS_AES).astype(int)
 
     # Age groups (clinical standard bucketing)
-    # fillna(1) — real FAERS has null ages, default to Young Adult (label 1)
+    # Use nullable Int64 + fillna before final astype(int)
+    # Real FAERS data has null ages — pd.cut returns NaN for those rows
+    # which crashes astype(int) directly
     df["age_group"] = pd.cut(
         df["age"],
         bins=[0, 18, 40, 65, 120],
-        labels=[0, 1, 2, 3]
+        labels=[0, 1, 2, 3]  # Pediatric, Young Adult, Adult, Elderly
     ).astype("Int64").fillna(1).astype(int)
 
     # High dose flag — fillna(0): unknown dosage treated as not high dose
@@ -141,15 +139,20 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     # Elderly flag — fillna(0): unknown age treated as not elderly
     df["elderly_flag"] = (df["age"].fillna(0) > 65).astype(int)
 
-    # Composite risk score — combines clinical risk factors
-    # This is a domain-informed feature that boosts model signal
+    # Composite risk score — softened weights so individual features
+    # can still contribute independently to the model.
+    # Previous weights were too aggressive causing risk_score to dominate
+    # at 42% feature importance, drowning out individual clinical signals.
+    #
+    # Old weights: elderly=2.0, high_dose=1.5, serious_ae=3.0
+    # New weights: elderly=0.5, high_dose=0.4, serious_ae=0.8
     df["risk_score"] = (
-        df["elderly_flag"] * 2.0
-        + df["high_dose_flag"] * 1.5
-        + df["is_serious_ae"] * 3.0
-        + df["has_comorbidity"] * 1.5
-        + df["has_prior_reaction"] * 1.0
-        + df["num_concomitant_drugs"] * 0.3
+        df["elderly_flag"] * 0.5
+        + df["high_dose_flag"] * 0.4
+        + df["is_serious_ae"] * 0.8
+        + df["has_comorbidity"] * 0.4
+        + df["has_prior_reaction"] * 0.3
+        + df["num_concomitant_drugs"] * 0.1
     )
 
     logger.info(f"Features after engineering: {df.shape[1]} columns")
@@ -213,6 +216,10 @@ def select_features_rfe(
         List of selected feature names
     """
     logger.info("Running RFE feature selection...")
+
+    # Scale features first — Logistic Regression converges much faster
+    # on standardized data especially at 900k+ rows
+    from sklearn.preprocessing import StandardScaler
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
@@ -227,8 +234,8 @@ def select_features_rfe(
 
     selected = X.columns[rfe.support_].tolist()
     logger.info(f"RFE selected {len(selected)} features: {selected}")
+
     return selected
-   
 
 
 def get_features_and_target(
@@ -289,3 +296,4 @@ if __name__ == "__main__":
     print(f"X shape: {X.shape}")
     print(f"y distribution:\n{y.value_counts()}")
     print(f"\nSample features:\n{X.head()}")
+    
