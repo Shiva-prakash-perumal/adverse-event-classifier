@@ -53,7 +53,6 @@ Return ONLY a valid JSON object with these exact fields:
     "dosage_mg": <float or null>,
     "route": <"Oral", "Intravenous", "Subcutaneous", "Topical", or "Unknown">,
     "adverse_event": <string describing the main adverse event>,
-    "time_to_onset_days": <float or null>,
     "num_concomitant_drugs": <integer>,
     "symptom_count": <integer>,
     "has_comorbidity": <0 or 1>,
@@ -189,19 +188,6 @@ def extract_with_rules(note: str) -> dict:
     if dose_match:
         dosage_mg = float(dose_match.group(1))
 
-    # Time to onset
-    time_to_onset_days = None
-    time_match = re.search(r"(\d+(?:\.\d+)?)\s*(day|hour|week)", note_lower)
-    if time_match:
-        value = float(time_match.group(1))
-        unit  = time_match.group(2)
-        if "hour" in unit:
-            time_to_onset_days = value / 24
-        elif "week" in unit:
-            time_to_onset_days = value * 7
-        else:
-            time_to_onset_days = value
-
     # Route
     route = "Unknown"
     if "oral" in note_lower or "tablet" in note_lower:
@@ -262,7 +248,6 @@ def extract_with_rules(note: str) -> dict:
         "dosage_mg":             dosage_mg,
         "route":                 route,
         "adverse_event":         adverse_event,
-        "time_to_onset_days":    time_to_onset_days,
         "num_concomitant_drugs": num_concomitant,
         "symptom_count":         symptom_count,
         "has_comorbidity":       has_comorbidity,
@@ -301,7 +286,6 @@ def fill_defaults(extracted: dict) -> dict:
         "dosage_mg":             50.0,
         "route":                 "Unknown",
         "adverse_event":         "Unknown",
-        "time_to_onset_days":    3.0,
         "num_concomitant_drugs": 0,
         "symptom_count":         1,
         "has_comorbidity":       0,

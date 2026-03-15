@@ -31,7 +31,6 @@ FEATURE_COLS = [
     "age",
     "weight_kg",
     "dosage_mg",
-    "time_to_onset_days",
     "num_concomitant_drugs",
     "symptom_count",
     "has_comorbidity",
@@ -80,9 +79,6 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     df["age"] = df["age"].clip(0, 120)
     df["weight_kg"] = df["weight_kg"].clip(20, 300)
     df["dosage_mg"] = df["dosage_mg"].clip(0, 10000)
-    if "time_to_onset_days" not in df.columns:
-        df["time_to_onset_days"] = 0.0  # default
-    df["time_to_onset_days"] = df["time_to_onset_days"].clip(0, 365)
 
     logger.info(f"Cleaned data shape: {df.shape}")
     return df

@@ -568,7 +568,6 @@ if analyze and clinical_note.strip():
             ("Gender",           extracted.get("gender", "Unknown")),
             ("Dosage",           f"{extracted.get('dosage_mg', 'N/A')} mg"),
             ("Route",            extracted.get("route", "Unknown")),
-            ("Time to Onset",    f"{extracted.get('time_to_onset_days', 'N/A')} days"),
             ("Concomitant Drugs",str(extracted.get("num_concomitant_drugs", 0))),
             ("Comorbidity",      "Yes" if extracted.get("has_comorbidity") else "No"),
             ("Prior Reaction",   "Yes" if extracted.get("has_prior_reaction") else "No"),

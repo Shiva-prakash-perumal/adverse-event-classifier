@@ -114,7 +114,6 @@ def predict_single(note: str) -> dict:
         "dosage_mg": extracted.get("dosage_mg", 50.0),
         "route": extracted.get("route", "Unknown"),
         "adverse_event": extracted.get("adverse_event", "Unknown"),
-        "time_to_onset_days": extracted.get("time_to_onset_days", 3.0),
         "num_concomitant_drugs": extracted.get("num_concomitant_drugs", 0),
         "symptom_count": extracted.get("symptom_count", 1),
         "has_comorbidity": extracted.get("has_comorbidity", 0),
