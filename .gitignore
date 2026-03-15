@@ -1,0 +1,81 @@
+# ─── Environment variables (NEVER commit these) ───────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ─── Virtual environments ─────────────────────────────────────────────────────
+venv/
+env/
+.venv/
+.env/
+ENV/
+.pem
+
+
+# ─── Data files (often too large for git) ────────────────────────────────────
+data/
+data/*.csv
+data/*.parquet
+data/*.json
+data/*.zip
+data/*.txt
+
+# ─── Model artifacts ──────────────────────────────────────────────────────────
+models/*.pkl
+models/*.joblib
+models/*.h5
+models/*.pt
+models/*.pth
+models/*.onnx
+models/*.png
+models/*.csv
+
+models_initial/*.pkl
+models_initial/*.joblib
+models_initial/*.h5
+models_initial/*.pt
+models_initial/*.pth
+models_initial/*.onnx
+models_initial/*.png
+models_initial/*.csv
+# Uncomment below to also ignore mlflow runs (usually large)
+# mlruns/
+
+# ─── MLflow ───────────────────────────────────────────────────────────────────
+mlruns/
+mlartifacts/
+
+# ─── Docker ───────────────────────────────────────────────────────────────────
+.dockerignore
+
+# ─── IDE / Editor ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Testing ──────────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+*.log
+
+# ─── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+desktop.ini
