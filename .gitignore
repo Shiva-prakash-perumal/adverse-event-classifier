@@ -32,23 +32,11 @@ data/*.zip
 data/*.txt
 
 # ─── Model artifacts ──────────────────────────────────────────────────────────
-models/*.pkl
-models/*.joblib
-models/*.h5
-models/*.pt
-models/*.pth
-models/*.onnx
-models/*.png
-models/*.csv
+models/
+models_initial/
+models_classImbalance/
+models_hyperparametertuning/
 
-models_initial/*.pkl
-models_initial/*.joblib
-models_initial/*.h5
-models_initial/*.pt
-models_initial/*.pth
-models_initial/*.onnx
-models_initial/*.png
-models_initial/*.csv
 # Uncomment below to also ignore mlflow runs (usually large)
 # mlruns/
 
