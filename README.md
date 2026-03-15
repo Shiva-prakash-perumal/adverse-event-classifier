@@ -179,7 +179,7 @@ Trains model iteratively, removes least important features until
 optimal subset found.
 
 Final features used:
-- `age`, `dosage_mg`, `time_to_onset_days`
+- `age`, `dosage_mg`
 - `num_concomitant_drugs`, `symptom_count`
 - `has_comorbidity`, `has_prior_reaction`
 - `is_serious_ae`, `elderly_flag`, `high_dose_flag`, `risk_score`

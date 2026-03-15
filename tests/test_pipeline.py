@@ -40,7 +40,6 @@ def generate_synthetic_faers(n_samples: int = 200, save: bool = False) -> pd.Dat
          "Cardiac Arrest", "Liver Failure", "Hypertension", "Hypotension", "Fever"],
         n_samples
     )
-    time_to_onset = np.random.exponential(scale=5, size=n_samples).clip(0.1, 90).round(1)
     num_concomitant_drugs = np.random.poisson(lam=2, size=n_samples).clip(0, 10)
     symptom_count = np.random.randint(1, 6, n_samples)
     has_comorbidity = np.random.choice([0, 1], n_samples, p=[0.55, 0.45])
@@ -62,7 +61,7 @@ def generate_synthetic_faers(n_samples: int = 200, save: bool = False) -> pd.Dat
     )
     notes = [
         f"{ages[i]} year old {genders[i].lower()} patient reported "
-        f"{adverse_events[i].lower()} approximately {time_to_onset[i]} days "
+        f"{adverse_events[i].lower()}"
         f"after taking {dosages[i]}mg of {drug_names[i]} via {routes[i].lower()} route."
         for i in range(n_samples)
     ]
@@ -76,7 +75,6 @@ def generate_synthetic_faers(n_samples: int = 200, save: bool = False) -> pd.Dat
         "dosage_mg":             dosages,
         "route":                 routes,
         "adverse_event":         adverse_events,
-        "time_to_onset_days":    time_to_onset,
         "num_concomitant_drugs": num_concomitant_drugs,
         "symptom_count":         symptom_count,
         "has_comorbidity":       has_comorbidity,
