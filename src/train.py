@@ -31,7 +31,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, GridSearchCV
 from sklearn.preprocessing import StandardScaler
-from sklearn.utils.class_weight import compute_sample_weight
 from sklearn.metrics import (
     f1_score, precision_score, recall_score,
     roc_auc_score, classification_report, confusion_matrix
@@ -393,6 +392,7 @@ def tune_random_forest(X_train, y_train) -> dict:
     #     "min_samples_leaf": [1, 5, 10],   # key for Moderate class
     #     "max_features":    ["sqrt", "log2"],
     # }
+
     param_grid = {
         "n_estimators":     [100, 200],       # removed 300
         "max_depth":        [10, 15],          # removed 8 and None
@@ -504,6 +504,14 @@ def train_all_models(
     models["xgboost"]["model"].set_params(**best_xgb_params)
     models["xgboost"]["params"].update(best_xgb_params)
 
+    # Override min_child_weight — tuning found 1 is best overall F1
+    # but min_child_weight=1 hurts Moderate class detection
+    # (too small leaf nodes → unstable splits on rare class)
+    # min_child_weight=5 forces more stable splits → better Moderate recall
+    models["xgboost"]["model"].set_params(min_child_weight=5)
+    models["xgboost"]["params"]["min_child_weight"] = 5
+    logger.info("Overriding min_child_weight=5 to improve Moderate class detection")
+
     results = {}
 
     for model_name, model_config in models.items():
@@ -554,4 +562,3 @@ if __name__ == "__main__":
 
     results = train_all_models(X, y, feature_names)
     print(f"\nFinal Results:\n{results}")
-    
