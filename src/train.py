@@ -387,18 +387,11 @@ def tune_random_forest(X_train, y_train) -> dict:
     """
     logger.info("\nTuning Random Forest...")
 
-    # param_grid = {
-    #     "n_estimators":    [100, 200, 300],
-    #     "max_depth":       [8, 10, 15, None],
-    #     "min_samples_leaf": [1, 5, 10],   # key for Moderate class
-    #     "max_features":    ["sqrt", "log2"],
-    # }
-
     param_grid = {
-        "n_estimators":     [100, 200],       # removed 300
-        "max_depth":        [10, 15],          # removed 8 and None
-        "min_samples_leaf": [1, 5],            # removed 10
-        "max_features":     ["sqrt"],          # removed log2
+        "n_estimators":    [100, 200, 300],
+        "max_depth":       [8, 10, 15, None],
+        "min_samples_leaf": [1, 5, 10],   # key for Moderate class
+        "max_features":    ["sqrt", "log2"],
     }
 
     base_model = RandomForestClassifier(
