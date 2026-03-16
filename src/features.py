@@ -47,9 +47,24 @@ FEATURE_COLS = [
 TARGET_COL = "severity_encoded"
 
 # Adverse events considered clinically serious
+# Includes both synthetic data terms AND real FAERS MedDRA preferred terms
+# MedDRA terms use British spelling and standardized nomenclature
 SERIOUS_AES = [
+    # Synthetic data terms (title case)
     "Chest Pain", "Anaphylaxis", "Cardiac Arrest",
-    "Liver Failure", "Dyspnea"
+    "Liver Failure", "Dyspnea",
+
+    # Real FAERS MedDRA preferred terms (lowercase)
+    "chest pain", "anaphylactic reaction", "anaphylactic shock",
+    "cardiac arrest", "cardio-respiratory arrest",
+    "hepatic failure", "acute hepatic failure",
+    "dyspnoea", "acute respiratory failure", "respiratory failure",
+    "respiratory arrest", "death", "sudden death",
+    "ventricular fibrillation", "ventricular tachycardia",
+    "pulmonary embolism", "cerebrovascular accident",
+    "myocardial infarction", "acute myocardial infarction",
+    "septic shock", "sepsis", "multi-organ failure",
+    "loss of consciousness", "coma", "convulsion"
 ]
 
 
@@ -125,11 +140,10 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     # Age groups (clinical standard bucketing)
     # Use nullable Int64 + fillna before final astype(int)
     # Real FAERS data has null ages — pd.cut returns NaN for those rows
-    # which crashes astype(int) directly
     df["age_group"] = pd.cut(
         df["age"],
         bins=[0, 18, 40, 65, 120],
-        labels=[0, 1, 2, 3]  # Pediatric, Young Adult, Adult, Elderly
+        labels=[0, 1, 2, 3]
     ).astype("Int64").fillna(1).astype(int)
 
     # High dose flag — fillna(0): unknown dosage treated as not high dose
@@ -217,17 +231,15 @@ def select_features_rfe(
     """
     logger.info("Running RFE feature selection...")
 
-    # Scale features first — Logistic Regression converges much faster
-    # on standardized data especially at 900k+ rows
     from sklearn.preprocessing import StandardScaler
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
     estimator = LogisticRegression(
-        max_iter=5000,      # increased from 1000
+        max_iter=5000,
         random_state=42,
-        solver="saga",      # saga handles large datasets better than lbfgs
-        n_jobs=-1           # use all CPU cores
+        solver="saga",
+        n_jobs=-1
     )
     rfe = RFE(estimator=estimator, n_features_to_select=n_features)
     rfe.fit(X_scaled, y)
@@ -296,4 +308,3 @@ if __name__ == "__main__":
     print(f"X shape: {X.shape}")
     print(f"y distribution:\n{y.value_counts()}")
     print(f"\nSample features:\n{X.head()}")
-    
