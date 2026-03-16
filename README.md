@@ -1,6 +1,6 @@
 # Adverse Event Intelligence Pipeline
 
-An end-to-end clinical ML pipeline that classifies adverse event severity from FDA FAERS data using XGBoost, Logistic Regression, and Random Forest, with an LLM extraction layer for unstructured clinical notes, MLflow experiment tracking, a Streamlit prototype UI, and CI/CD via GitHub Actions.
+An end-to-end ML pipeline for classifying adverse event severity in clinical trials using LLM extraction + classical ML + MLOps.
 
 ---
 

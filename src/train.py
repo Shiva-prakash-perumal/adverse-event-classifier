@@ -29,8 +29,9 @@ import seaborn as sns
 from pathlib import Path
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, GridSearchCV
 from sklearn.preprocessing import StandardScaler
+from sklearn.utils.class_weight import compute_sample_weight
 from sklearn.metrics import (
     f1_score, precision_score, recall_score,
     roc_auc_score, classification_report, confusion_matrix
@@ -285,6 +286,164 @@ def train_model(
     return metrics
 
 
+def run_grid_search(
+    model,
+    param_grid: dict,
+    X_train,
+    y_train,
+    model_name: str,
+    use_sample_weight: bool = False
+) -> dict:
+    """
+    Generic GridSearchCV runner used by all three tuning functions.
+
+    Parameters:
+        model:              base estimator
+        param_grid:         hyperparameter grid to search
+        X_train:            training features
+        y_train:            training labels
+        model_name:         name for logging and saving results
+        use_sample_weight:  True for XGBoost (doesn't support class_weight param)
+
+    Returns:
+        best_params dict
+    """
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+    grid_search = GridSearchCV(
+        estimator=model,
+        param_grid=param_grid,
+        cv=cv,
+        scoring="f1_macro",   # optimize for all 3 classes equally
+        n_jobs=-1,
+        verbose=1,
+        refit=True
+    )
+
+    if use_sample_weight:
+        sample_weights = compute_sample_weight(class_weight="balanced", y=y_train)
+        grid_search.fit(X_train, y_train, sample_weight=sample_weights)
+    else:
+        grid_search.fit(X_train, y_train)
+
+    logger.info(f"{model_name} best params: {grid_search.best_params_}")
+    logger.info(f"{model_name} best CV F1 Macro: {grid_search.best_score_:.4f}")
+
+    # Save full results
+    results_df = pd.DataFrame(grid_search.cv_results_)
+    results_df = results_df.sort_values("mean_test_score", ascending=False)
+    results_df.to_csv(MODELS_DIR / f"{model_name}_tuning_results.csv", index=False)
+    logger.info(f"Tuning results saved to models/{model_name}_tuning_results.csv")
+
+    return grid_search.best_params_
+
+
+def tune_logistic_regression(X_train, y_train) -> dict:
+    """
+    Tune Logistic Regression hyperparameters.
+
+    Key params:
+    - C:       inverse regularization strength (lower = more regularization)
+    - solver:  algorithm for optimization (saga best for large imbalanced data)
+    - max_iter: increase for convergence on large datasets
+    """
+    logger.info("\nTuning Logistic Regression...")
+
+    param_grid = {
+        "C":        [0.01, 0.1, 1.0, 10.0],
+        "solver":   ["saga"],
+        "max_iter": [1000, 3000, 5000],
+    }
+
+    # Scale features first — LR needs standardized data
+    from sklearn.preprocessing import StandardScaler
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_train)
+
+    base_model = LogisticRegression(
+        multi_class="multinomial",
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1
+    )
+
+    return run_grid_search(
+        base_model, param_grid,
+        X_scaled, y_train,
+        model_name="logistic_regression",
+        use_sample_weight=False
+    )
+
+
+def tune_random_forest(X_train, y_train) -> dict:
+    """
+    Tune Random Forest hyperparameters.
+
+    Key params:
+    - n_estimators:    more trees = more stable but slower
+    - max_depth:       controls overfitting
+    - min_samples_leaf: higher = smoother model, better on rare classes
+    - max_features:    fraction of features per split
+    """
+    logger.info("\nTuning Random Forest...")
+
+    param_grid = {
+        "n_estimators":    [100, 200, 300],
+        "max_depth":       [8, 10, 15, None],
+        "min_samples_leaf": [1, 5, 10],   # key for Moderate class
+        "max_features":    ["sqrt", "log2"],
+    }
+
+    base_model = RandomForestClassifier(
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1
+    )
+
+    return run_grid_search(
+        base_model, param_grid,
+        X_train.values, y_train,
+        model_name="random_forest",
+        use_sample_weight=False
+    )
+
+
+def tune_xgboost(X_train, y_train) -> dict:
+    """
+    Tune XGBoost hyperparameters.
+
+    Key params:
+    - min_child_weight: higher = harder to split rare Moderate nodes
+    - gamma:            min loss reduction required to make a split
+    - max_depth:        tree complexity
+    - learning_rate:    step size shrinkage
+    - n_estimators:     number of trees
+    """
+    logger.info("\nTuning XGBoost... (may take 30-60 mins on large data)")
+
+    param_grid = {
+        "n_estimators":     [300, 500],
+        "max_depth":        [4, 6, 8],
+        "learning_rate":    [0.01, 0.05],
+        "min_child_weight": [1, 5, 10],
+        "gamma":            [0, 0.5, 1.0],
+        "subsample":        [0.8, 0.9],
+    }
+
+    base_model = XGBClassifier(
+        eval_metric="mlogloss",
+        random_state=42,
+        n_jobs=-1
+    )
+
+    return run_grid_search(
+        base_model, param_grid,
+        X_train.values, y_train,
+        model_name="xgboost",
+        use_sample_weight=True   # XGBoost needs sample_weight not class_weight
+    )
+
+
 def train_all_models(
     X: pd.DataFrame,
     y: pd.Series,
@@ -311,7 +470,49 @@ def train_all_models(
     logger.info(f"Train size: {len(X_train)} | Test size: {len(X_test)}")
     logger.info(f"Train severity distribution:\n{pd.Series(y_train).value_counts()}")
 
+    # ── Tune all three models before full training ───────────────────────────
+    logger.info("\n" + "="*50)
+    logger.info("HYPERPARAMETER TUNING — ALL MODELS")
+    logger.info("="*50)
+
+    logger.info("\nStep 1/3: Tuning Logistic Regression...")
+    best_lr_params = tune_logistic_regression(X_train, y_train)
+
+    logger.info("\nStep 2/3: Tuning Random Forest...")
+    best_rf_params = tune_random_forest(X_train, y_train)
+
+    logger.info("\nStep 3/3: Tuning XGBoost...")
+    best_xgb_params = tune_xgboost(X_train, y_train)
+
+    logger.info("\nAll tuning complete. Best params found:")
+    logger.info(f"  Logistic Regression: {best_lr_params}")
+    logger.info(f"  Random Forest:       {best_rf_params}")
+    logger.info(f"  XGBoost:             {best_xgb_params}")
+
+    # Apply best params to each model before training
     models = get_models()
+    models["logistic_regression"]["model"].set_params(**best_lr_params)
+    models["logistic_regression"]["params"].update(best_lr_params)
+    models["random_forest"]["model"].set_params(**best_rf_params)
+    models["random_forest"]["params"].update(best_rf_params)
+    models["xgboost"]["model"].set_params(**best_xgb_params)
+    models["xgboost"]["params"].update(best_xgb_params)
+
+    # Override min_child_weight — tuning found 1 is best overall F1
+    # but min_child_weight=1 hurts Moderate class detection
+    # (too small leaf nodes → unstable splits on rare class)
+    # min_child_weight=5 forces more stable splits → better Moderate recall
+    models["xgboost"]["model"].set_params(min_child_weight=5)
+    models["xgboost"]["params"]["min_child_weight"] = 5
+    logger.info("Overriding min_child_weight=5 to improve Moderate class detection")
+
+    # is_serious_ae dominates XGBoost at 90% importance due to gradient
+    # boosting's sensitivity to single dominant binary features.
+    # Remove it from XGBoost only — RF and LR use the full feature set.
+    xgb_exclude = ["is_serious_ae"]
+    xgb_features = [f for f in feature_names if f not in xgb_exclude]
+    logger.info(f"XGBoost features (is_serious_ae excluded): {xgb_features}")
+
     results = {}
 
     for model_name, model_config in models.items():
@@ -319,9 +520,19 @@ def train_all_models(
         logger.info(f"Training: {model_name.upper()}")
         logger.info(f"{'='*50}")
 
+        # XGBoost gets reduced feature set
+        if model_name == "xgboost":
+            X_train_model = X_train[xgb_features]
+            X_test_model  = X_test[xgb_features]
+            model_features = xgb_features
+        else:
+            X_train_model = X_train
+            X_test_model  = X_test
+            model_features = feature_names
+
         metrics = train_model(
-            X_train, X_test, y_train, y_test,
-            model_name, model_config, feature_names
+            X_train_model, X_test_model, y_train, y_test,
+            model_name, model_config, model_features
         )
         results[model_name] = metrics
 
