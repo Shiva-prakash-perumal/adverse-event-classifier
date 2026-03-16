@@ -135,7 +135,11 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
     # Flag: Is the adverse event clinically serious?
-    df["is_serious_ae"] = df["adverse_event"].isin(SERIOUS_AES).astype(int)
+    # Use case-insensitive matching — real FAERS MedDRA preferred terms use
+    # Title Case (e.g. "Chest Pain") while our list has mixed casing.
+    # Without this fix, is_serious_ae = 0 for almost all real FAERS records.
+    serious_lower = [ae.lower() for ae in SERIOUS_AES]
+    df["is_serious_ae"] = df["adverse_event"].str.lower().isin(serious_lower).astype(int)
 
     # Age groups (clinical standard bucketing)
     # Use nullable Int64 + fillna before final astype(int)
@@ -308,3 +312,4 @@ if __name__ == "__main__":
     print(f"X shape: {X.shape}")
     print(f"y distribution:\n{y.value_counts()}")
     print(f"\nSample features:\n{X.head()}")
+    
