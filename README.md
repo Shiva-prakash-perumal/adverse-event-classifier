@@ -310,6 +310,13 @@ View results: `mlflow ui` → http://localhost:5000
 
 ---
 
+## Results
+
+Model comparison and evaluation plots are available in the
+[v1.0.0 release](https://github.com/Shiva-prakash-perumal/adverse-event-classifier/releases/tag/v1.0.0)
+
+---
+
 ## Disclaimer
 
 This is a research prototype built to demonstrate end-to-end ML pipeline skills for clinical trial applications. All predictions should be reviewed by qualified clinical staff before any clinical decision is made. Not intended for production clinical use.
