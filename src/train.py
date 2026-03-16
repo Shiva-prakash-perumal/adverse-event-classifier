@@ -31,6 +31,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, GridSearchCV
 from sklearn.preprocessing import StandardScaler
+from sklearn.utils.class_weight import compute_sample_weight
 from sklearn.metrics import (
     f1_score, precision_score, recall_score,
     roc_auc_score, classification_report, confusion_matrix
@@ -512,6 +513,13 @@ def train_all_models(
     models["xgboost"]["params"]["min_child_weight"] = 5
     logger.info("Overriding min_child_weight=5 to improve Moderate class detection")
 
+    # is_serious_ae dominates XGBoost at 90% importance due to gradient
+    # boosting's sensitivity to single dominant binary features.
+    # Remove it from XGBoost only — RF and LR use the full feature set.
+    xgb_exclude = ["is_serious_ae"]
+    xgb_features = [f for f in feature_names if f not in xgb_exclude]
+    logger.info(f"XGBoost features (is_serious_ae excluded): {xgb_features}")
+
     results = {}
 
     for model_name, model_config in models.items():
@@ -519,9 +527,19 @@ def train_all_models(
         logger.info(f"Training: {model_name.upper()}")
         logger.info(f"{'='*50}")
 
+        # XGBoost gets reduced feature set
+        if model_name == "xgboost":
+            X_train_model = X_train[xgb_features]
+            X_test_model  = X_test[xgb_features]
+            model_features = xgb_features
+        else:
+            X_train_model = X_train
+            X_test_model  = X_test
+            model_features = feature_names
+
         metrics = train_model(
-            X_train, X_test, y_train, y_test,
-            model_name, model_config, feature_names
+            X_train_model, X_test_model, y_train, y_test,
+            model_name, model_config, model_features
         )
         results[model_name] = metrics
 

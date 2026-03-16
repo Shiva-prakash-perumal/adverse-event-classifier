@@ -70,7 +70,18 @@ def run_pipeline(use_synthetic: bool = True):
     # Step 5: Evaluate production model
     logger.info("\nStep 4: Evaluating production model...")
     model, feature_names_saved, model_name = load_production_model()
-    eval_results = full_evaluation(model, X_test, y_test, model_name)
+
+    # Align X_test to the features the production model was actually trained on
+    # XGBoost may have been trained on a subset (e.g. is_serious_ae excluded)
+    # feature_names_saved reflects the exact features used during training
+    X_test_eval = X_test.copy()
+    for col in feature_names_saved:
+        if col not in X_test_eval.columns:
+            X_test_eval[col] = 0
+    X_test_eval = X_test_eval[feature_names_saved]
+    logger.info(f"Evaluation feature set: {feature_names_saved}")
+
+    eval_results = full_evaluation(model, X_test_eval, y_test, model_name)
 
     # Save feature names for Streamlit app
     joblib.dump(feature_names, MODELS_DIR / "feature_names.pkl")
