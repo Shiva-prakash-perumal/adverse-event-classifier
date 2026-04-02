@@ -17,15 +17,18 @@ import sys
 import logging
 import joblib
 import pandas as pd
+import numpy as np
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 
 sys.path.append(str(Path(__file__).parent))
 
 from ingestion import load_data
-from features import get_features_and_target, select_features_mutual_info, select_features_rfe
 from train import train_all_models
 from evaluate import full_evaluation, load_production_model
+from features import get_features_and_target, select_features_mutual_info, select_features_rfe
+from features import encode_categoricals, clean_data, engineer_features
+from llm_extractor import note_to_features
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -57,7 +60,7 @@ def run_pipeline():
     # Step 1: Load data
     # ══════════════════════════════════════════════════════════════════════════
     logger.info("\nStep 1: Loading data...")
-    df = load_data()
+    df = load_data()  # FIXED: Removed use_synthetic parameter
     logger.info(f"Loaded {len(df)} records")
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -66,7 +69,7 @@ def run_pipeline():
     logger.info("\nStep 2: Splitting into train/test sets...")
     
     # Need to encode target for stratification
-    from features import encode_categoricals
+  
     df_with_target = encode_categoricals(df)
     y_all = df_with_target["severity_encoded"]
     
@@ -129,16 +132,20 @@ def run_pipeline():
     logger.info("\nStep 5: Training all models...")
     
     # Combine train data back into single DataFrame for train_all_models
-    # (it will do its own internal CV splits)
-    X_combined = pd.concat([X_train_final, X_test_final])
-    y_combined = pd.concat([y_train, y_test])
+    # Reset index so we have positional indices [0, 1, 2, ...]
+    X_combined = pd.concat([X_train_final, X_test_final], ignore_index=True)
+    y_combined = pd.concat([y_train, y_test], ignore_index=True)
+    
+    # Map test_indices to new positional indices after concat
+    # Test data starts at position len(X_train_final)
+    new_test_indices = list(range(len(X_train_final), len(X_combined)))
     
     results_df = train_all_models(
         X_combined, 
         y_combined, 
         final_features,
         test_size=0.2,
-        test_indices=test_indices.tolist()
+        test_indices=new_test_indices  # Pass test indices in new coordinate system
     )
     logger.info(f"\nModel Comparison:\n{results_df}")
 
@@ -189,9 +196,7 @@ def predict_single(note: str) -> dict:
     Returns:
         Dict with prediction, confidence, extracted fields
     """
-    from llm_extractor import note_to_features
-    from features import engineer_features, encode_categoricals
-    import numpy as np
+    
 
     # Step 1: Extract structured fields from note
     extracted = note_to_features(note)
@@ -220,7 +225,7 @@ def predict_single(note: str) -> dict:
     transformer = joblib.load(MODELS_DIR / "feature_transformer.pkl")
     
     # Apply the same transformations used during training
-    from features import clean_data
+    
     df_clean, _ = clean_data(df_single, is_train=False, transformer=transformer)
     df_encoded = encode_categoricals(df_clean)
     df_engineered = engineer_features(df_encoded)
@@ -252,7 +257,6 @@ def predict_single(note: str) -> dict:
         "needs_review": confidence < 0.60,
         "extracted_fields": extracted
     }
-
 
 if __name__ == "__main__":
     results_df, eval_results = run_pipeline()
