@@ -41,7 +41,6 @@ from sklearn.metrics import (
     f1_score, precision_score, recall_score,
     roc_auc_score, classification_report, confusion_matrix
 )
-import shutil
 from xgboost import XGBClassifier
 from dotenv import load_dotenv
 
@@ -357,7 +356,6 @@ def tune_logistic_regression(X_train, y_train) -> dict:
     }
 
     # Scale features first — LR needs standardized data
-    from sklearn.preprocessing import StandardScaler
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_train)
 
@@ -518,11 +516,6 @@ def train_all_models(
     models["xgboost"]["params"]["min_child_weight"] = 5
     logger.info("Overriding min_child_weight=5 to improve Moderate class detection")
 
-    # is_serious_ae dominates XGBoost — exclude it
-    xgb_exclude = ["is_serious_ae"]
-    xgb_features = [f for f in feature_names if f not in xgb_exclude]
-    logger.info(f"XGBoost features (is_serious_ae excluded): {xgb_features}")
-
     results = {}
     trained_feature_sets = {}  # Track which features each model used
 
@@ -531,15 +524,10 @@ def train_all_models(
         logger.info(f"Training: {model_name.upper()}")
         logger.info(f"{'='*50}")
 
-        # XGBoost gets reduced feature set
-        if model_name == "xgboost":
-            X_train_model = X_train[xgb_features]
-            X_test_model  = X_test[xgb_features]
-            model_features = xgb_features
-        else:
-            X_train_model = X_train
-            X_test_model  = X_test
-            model_features = feature_names
+        # All models use same features now
+        X_train_model = X_train
+        X_test_model  = X_test
+        model_features = feature_names
 
         # Track features used by this model
         trained_feature_sets[model_name] = model_features
@@ -561,11 +549,11 @@ def train_all_models(
     logger.info(f"\nBest model: {best_model_name} (F1 Macro: {results_df.loc[best_model_name, 'f1_macro']:.4f})")
 
     # Copy best model to production path
+    import shutil
     best_model_path = MODELS_DIR / f"{best_model_name}.pkl"
     prod_model_path = MODELS_DIR / "production_model.pkl"
     shutil.copy(best_model_path, prod_model_path)
 
-    # FIXED: Save the ACTUAL feature names used by the best model
     best_model_features = trained_feature_sets[best_model_name]
     joblib.dump(best_model_features, MODELS_DIR / "feature_names.pkl")
     joblib.dump(best_model_name, MODELS_DIR / "best_model_name.pkl")

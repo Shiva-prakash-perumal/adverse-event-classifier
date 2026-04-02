@@ -25,6 +25,7 @@ from sklearn.pipeline import Pipeline
 import joblib
 from pathlib import Path
 from ingestion import load_data
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -42,35 +43,12 @@ FEATURE_COLS = [
     "has_prior_reaction",
     "gender_encoded",
     "route_encoded",
-    "is_serious_ae",
     "age_group",
     "high_dose_flag",
-    "elderly_flag",
-    "risk_score"
+    "elderly_flag"
 ]
 
 TARGET_COL = "severity_encoded"
-
-# Adverse events considered clinically serious
-# Includes both synthetic data terms AND real FAERS MedDRA preferred terms
-# MedDRA terms use British spelling and standardized nomenclature
-SERIOUS_AES = [
-    # Synthetic data terms (title case)
-    "Chest Pain", "Anaphylaxis", "Cardiac Arrest",
-    "Liver Failure", "Dyspnea",
-
-    # Real FAERS MedDRA preferred terms (lowercase)
-    "chest pain", "anaphylactic reaction", "anaphylactic shock",
-    "cardiac arrest", "cardio-respiratory arrest",
-    "hepatic failure", "acute hepatic failure",
-    "dyspnoea", "acute respiratory failure", "respiratory failure",
-    "respiratory arrest", "death", "sudden death",
-    "ventricular fibrillation", "ventricular tachycardia",
-    "pulmonary embolism", "cerebrovascular accident",
-    "myocardial infarction", "acute myocardial infarction",
-    "septic shock", "sepsis", "multi-organ failure",
-    "loss of consciousness", "coma", "convulsion"
-]
 
 
 class FeatureTransformer:
@@ -114,6 +92,19 @@ class FeatureTransformer:
         # High dose flag using fitted threshold
         df["high_dose_flag"] = (df["dosage_mg"].fillna(0) > self.high_dose_threshold).astype(int)
         
+        # Age groups - now inside transformer to prevent distribution leakage
+        df["age_group"] = pd.cut(
+            df["age"],
+            bins=[0, 18, 40, 65, 120],
+            labels=[0, 1, 2, 3]
+        ).astype("Int64")
+        
+        # Fill NaN age groups (from out-of-range ages) with separate category
+        df["age_group"] = df["age_group"].fillna(4).astype(int)
+        
+        # Elderly flag
+        df["elderly_flag"] = (df["age"].fillna(0) > 65).astype(int)
+        
         return df
     
     def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -137,9 +128,6 @@ def clean_data(df: pd.DataFrame, is_train: bool = True, transformer: FeatureTran
     logger.info("Cleaning data...")
     df = df.copy()
 
-    # Remove rows with missing target
-    df = df.dropna(subset=["severity"])
-
     # Drop duplicates
     initial_len = len(df)
     df = df.drop_duplicates(subset=["report_id"])
@@ -149,7 +137,10 @@ def clean_data(df: pd.DataFrame, is_train: bool = True, transformer: FeatureTran
     df["gender"] = df["gender"].fillna("Unknown")
     df["route"] = df["route"].fillna("Unknown")
 
-    # Clip outliers (no leakage - uses domain knowledge, not data statistics)
+    # Remove rows with missing target
+    df = df.dropna(subset=["severity"])
+
+    # Clip outliers (no leakage )
     df["age"] = df["age"].clip(0, 120)
     df["weight_kg"] = df["weight_kg"].clip(20, 300)
     df["dosage_mg"] = df["dosage_mg"].clip(0, 10000)
@@ -193,45 +184,18 @@ def encode_categoricals(df: pd.DataFrame) -> pd.DataFrame:
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create derived features that capture clinical domain knowledge.
+  
+    age_group, high_dose_flag, and elderly_flag are now created in FeatureTransformer.
     
-    NOTE: high_dose_flag is now created in the FeatureTransformer to prevent leakage.
-    
-    Domain knowledge applied:
-    - Elderly patients (>65) have higher adverse event risk
-    - Serious adverse events (chest pain, anaphylaxis etc.) skew severe
-    - Composite risk score combines multiple factors
+    This function is now minimal - just a placeholder for any future
+    feature engineering that doesn't risk leakage.
     """
     logger.info("Engineering features...")
     df = df.copy()
-
-    # Flag: Is the adverse event clinically serious?
-    serious_lower = [ae.lower() for ae in SERIOUS_AES]
-    df["is_serious_ae"] = df["adverse_event"].str.lower().isin(serious_lower).astype(int)
-
-    # Age groups (clinical standard bucketing)
-    # Handle null ages by assigning to "Unknown" group (3)
-    df["age_group"] = pd.cut(
-        df["age"],
-        bins=[0, 18, 40, 65, 120],
-        labels=[0, 1, 2, 3]
-    ).astype("Int64")
     
-    # Fill NaN age groups with a separate category instead of assuming young adult
-    df["age_group"] = df["age_group"].fillna(4).astype(int)  # 4 = unknown age group
-
-    # Elderly flag
-    df["elderly_flag"] = (df["age"].fillna(0) > 65).astype(int)
-
-    # Composite risk score
-    df["risk_score"] = (
-        df["elderly_flag"] * 0.5
-        + df["high_dose_flag"] * 0.4
-        + df["is_serious_ae"] * 0.8
-        + df["has_comorbidity"] * 0.4
-        + df["has_prior_reaction"] * 0.3
-        + df["num_concomitant_drugs"] * 0.1
-    )
-
+    # All feature engineering now happens in FeatureTransformer
+    # to ensure proper train/test separation
+    
     logger.info(f"Features after engineering: {df.shape[1]} columns")
     return df
 
@@ -243,8 +207,6 @@ def select_features_mutual_info(
 ) -> list:
     """
     Step 1 of feature selection: Mutual Information.
-    
-    Only call this on TRAINING data to prevent leakage.
 
     Mutual Information measures how much knowing a feature reduces
     uncertainty about the target — captures both linear AND non-linear
@@ -282,8 +244,6 @@ def select_features_rfe(
 ) -> list:
     """
     Step 2 of feature selection: Recursive Feature Elimination (RFE).
-    
-    Only call this on TRAINING data to prevent leakage.
 
     RFE trains a model, ranks features by importance, removes the least
     important, retrains, repeats — finds the optimal subset.
@@ -297,8 +257,6 @@ def select_features_rfe(
         List of selected feature names
     """
     logger.info("Running RFE feature selection...")
-
-    from sklearn.preprocessing import StandardScaler
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
@@ -325,7 +283,6 @@ def get_features_and_target(
     """
     Full feature pipeline: clean → encode → engineer.
     
-    CHANGE: Feature selection removed from here.
     Feature selection must happen AFTER train/test split to prevent leakage.
     
     Parameters:
@@ -359,10 +316,9 @@ def get_scaler(X_train: pd.DataFrame) -> StandardScaler:
 
 
 if __name__ == "__main__":
-    
 
     df = load_data()
-    
+
     X, y, transformer = get_features_and_target(df, is_train=True)
 
     print(f"\nFeature set: {X.columns.tolist()}")

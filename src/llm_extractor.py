@@ -1,12 +1,20 @@
 """
 llm_extractor.py
 ----------------
-Uses Mistral AI to extract structured fields
-from unstructured clinical notes.
+Uses Mistral AI to extract structured fields from unstructured clinical notes.
+
+FIXES:
+- Removed is_serious_ae from output (target leakage)
+- severity_indicators kept for human review only, NOT as model features
 
 Flow:
     Unstructured note → Mistral LLM → Structured JSON → ML Classifier → Severity Prediction
 
+Config (set in .env):
+    MISTRAL_API_KEY   - your_API_key
+    MISTRAL_BASE_URL  - your_api_base_url
+    MISTRAL_MODEL     - your_llm_model_url
+    MISTRAL_CERT_PATH - path to your SSL certificate .pem file
 """
 
 import os
@@ -25,16 +33,9 @@ logger = logging.getLogger(__name__)
 
 # ── Config from .env ──────────────────────────────────────────────────────────
 API_KEY   = os.getenv("MISTRAL_API_KEY")
-BASE_URL  = os.getenv("MISTRAL_BASE_URL", "your_api_base_url")
-MODEL     = os.getenv("MISTRAL_MODEL",    "your_llm_model_url")
+BASE_URL  = os.getenv("MISTRAL_BASE_URL")
+MODEL     = os.getenv("MISTRAL_MODEL")
 CERT_PATH = os.getenv("MISTRAL_CERT_PATH")
-
-# Adverse events considered clinically serious
-SERIOUS_AES = [
-    "chest pain", "anaphylaxis", "cardiac arrest",
-    "liver failure", "dyspnea", "shortness of breath",
-    "respiratory failure", "seizure", "stroke"
-]
 
 EXTRACTION_PROMPT = """You are a clinical data extraction assistant.
 Extract structured information from the clinical adverse event note below.
@@ -70,10 +71,10 @@ Clinical note:
 """
 
 
-# ── Mistral   extraction ─────────────────────────────────────────────────
+# ── Mistral extraction ────────────────────────────────────────────────────────
 def extract_with_mistral(note: str) -> Optional[dict]:
     """
-    Extract structured data using Mistral via the      .
+    Extract structured data using Mistral via API.
 
     Uses the OpenAI-compatible /chat/completions endpoint.
     SSL verification uses the provided .pem certificate.
@@ -113,7 +114,7 @@ def extract_with_mistral(note: str) -> Optional[dict]:
         )
 
     try:
-        logger.info(f"Calling Mistral  : {BASE_URL}/chat/completions")
+        logger.info(f"Calling Mistral API: {BASE_URL}/chat/completions")
         response = requests.post(
             f"{BASE_URL}/chat/completions",
             headers=headers,
@@ -141,13 +142,13 @@ def extract_with_mistral(note: str) -> Optional[dict]:
         )
         return None
     except requests.exceptions.ConnectionError as e:
-        logger.error(f"Connection error to Mistral  : {e}")
+        logger.error(f"Connection error to Mistral API: {e}")
         return None
     except requests.exceptions.Timeout:
-        logger.error("Mistral   request timed out after 30s")
+        logger.error("Mistral API request timed out after 30s")
         return None
     except requests.exceptions.HTTPError as e:
-        logger.error(f"Mistral   HTTP error: {e.response.status_code} — {e.response.text}")
+        logger.error(f"Mistral API HTTP error: {e.response.status_code} — {e.response.text}")
         return None
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse Mistral JSON response: {e}\nRaw: {raw}")
@@ -208,7 +209,7 @@ def extract_with_rules(note: str) -> dict:
     elif "topical" in note_lower:
         route = "Topical"
 
-    # Severity indicators
+    # Severity indicators (for human review ONLY - NOT used as features)
     severity_words = [
         "severe", "serious", "critical", "life-threatening",
         "hospitalized", "emergency", "fatal", "death", "icu"
@@ -272,7 +273,7 @@ def extract_from_note(note: str) -> dict:
     Main extraction function.
 
     Priority:
-    1. Mistral via       (if MISTRAL_API_KEY is set)
+    1. Mistral via API (if MISTRAL_API_KEY is set)
     2. Rule-based fallback (always works, no API needed)
     """
     if API_KEY:
@@ -313,14 +314,17 @@ def note_to_features(note: str) -> dict:
     """
     Full pipeline: clinical note → extracted fields → filled defaults.
     Ready to feed into ML feature engineering pipeline.
+    
+    FIXED: is_serious_ae removed to prevent target leakage.
+    severity_indicators kept for human review only, NOT used as model features.
     """
     extracted = extract_from_note(note)
     filled    = fill_defaults(extracted)
 
-    # Flag serious adverse events
-    ae_lower = str(filled.get("adverse_event", "")).lower()
-    filled["is_serious_ae"] = int(any(ae in ae_lower for ae in SERIOUS_AES))
-
+    # severity_indicators are for human review/logging only
+    # They are NOT used as features to prevent keyword leakage
+    # (model learning "severe" text = Severe label)
+    
     logger.info(f"Extracted fields:\n{json.dumps(filled, indent=2)}")
     return filled
 
@@ -342,3 +346,4 @@ if __name__ == "__main__":
         print("\nExtracted:")
         result = note_to_features(note)
         print(json.dumps(result, indent=2))
+        
