@@ -18,6 +18,9 @@ import pytest
 import numpy as np
 import pandas as pd
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
 from features import get_features_and_target, select_features_mutual_info
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
@@ -27,9 +30,6 @@ from llm_extractor import extract_with_rules, fill_defaults, note_to_features
 from xgboost import XGBClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
-
-sys.path.append(str(Path(__file__).parent.parent / "src"))
-
 
 # =============================================================================
 # SYNTHETIC DATA GENERATOR — inline for CI/CD
