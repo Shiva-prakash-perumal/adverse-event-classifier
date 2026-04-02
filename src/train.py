@@ -3,6 +3,11 @@ train.py
 --------
 Trains three classifiers and tracks all experiments with MLflow.
 
+FIXED VERSION:
+- Accepts pre-split test indices to maintain consistent splits
+- Saves actual feature names used by best model (handles XGBoost feature exclusion)
+- Removed use_synthetic parameter calls
+
 Models:
 1. Logistic Regression — interpretable baseline
 2. Random Forest       — robust, handles non-linearity
@@ -36,6 +41,7 @@ from sklearn.metrics import (
     f1_score, precision_score, recall_score,
     roc_auc_score, classification_report, confusion_matrix
 )
+import shutil
 from xgboost import XGBClassifier
 from dotenv import load_dotenv
 
@@ -222,7 +228,11 @@ def train_model(
 
         # Per-class F1 (important — don't just look at macro average)
         f1_per_class = f1_score(y_test, y_pred, average=None)
-        f1_mild, f1_moderate, f1_severe = f1_per_class
+        
+        # FIXED: Handle case where not all classes present in test set
+        f1_mild = f1_per_class[0] if len(f1_per_class) > 0 else 0.0
+        f1_moderate = f1_per_class[1] if len(f1_per_class) > 1 else 0.0
+        f1_severe = f1_per_class[2] if len(f1_per_class) > 2 else 0.0
 
         # AUC-ROC (multiclass OvR)
         auc = None
@@ -244,94 +254,85 @@ def train_model(
             "f1_mild": round(f1_mild, 4),
             "f1_moderate": round(f1_moderate, 4),
             "f1_severe": round(f1_severe, 4),
-            "cv_f1_mean": round(cv_scores.mean(), 4),
-            "cv_f1_std": round(cv_scores.std(), 4),
+            "auc_roc": round(auc, 4) if auc else None,
+            "cv_mean": round(cv_scores.mean(), 4),
+            "cv_std": round(cv_scores.std(), 4)
         }
-        if auc:
-            metrics["auc_roc"] = round(auc, 4)
 
         # Log to MLflow
         mlflow.log_params(params)
-        mlflow.log_metrics(metrics)
+        mlflow.log_metrics({k: v for k, v in metrics.items() if v is not None})
 
-        # Log model artifact
-        if model_name == "xgboost":
-            mlflow.xgboost.log_model(model, "model")
-        else:
-            mlflow.sklearn.log_model(model, "model")
+        # Save model
+        model_path = MODELS_DIR / f"{model_name}.pkl"
+        joblib.dump(model, model_path)
+        mlflow.log_artifact(str(model_path))
 
-        # Log confusion matrix
+        # Confusion matrix
         cm_path = plot_confusion_matrix(y_test, y_pred, model_name)
         mlflow.log_artifact(cm_path)
 
-        # Log feature importance
+        # Feature importance
         fi_path = plot_feature_importance(model, feature_names, model_name)
         if fi_path:
             mlflow.log_artifact(fi_path)
 
-        # Log classification report as text
-        report = classification_report(
-            y_test, y_pred,
-            target_names=["Mild", "Moderate", "Severe"]
-        )
-        logger.info(f"\n{model_name} Classification Report:\n{report}")
-        mlflow.log_text(report, "classification_report.txt")
-
-        # Save model locally
-        joblib.dump(model, MODELS_DIR / f"{model_name}.pkl")
-        logger.info(f"Saved {model_name} to {MODELS_DIR}")
-
-        logger.info(f"{model_name} | F1 Macro: {f1_macro:.4f} | AUC: {auc}")
+        logger.info(f"{model_name} — F1 Macro: {f1_macro:.4f} | "
+                   f"F1 Mild: {f1_mild:.4f} | F1 Moderate: {f1_moderate:.4f} | F1 Severe: {f1_severe:.4f}")
 
     return metrics
 
 
 def run_grid_search(
-    model,
+    base_model,
     param_grid: dict,
-    X_train,
-    y_train,
+    X_train: np.ndarray,
+    y_train: pd.Series,
     model_name: str,
     use_sample_weight: bool = False
 ) -> dict:
     """
-    Generic GridSearchCV runner used by all three tuning functions.
+    Run GridSearchCV for hyperparameter tuning.
 
     Parameters:
-        model:              base estimator
-        param_grid:         hyperparameter grid to search
-        X_train:            training features
-        y_train:            training labels
-        model_name:         name for logging and saving results
-        use_sample_weight:  True for XGBoost (doesn't support class_weight param)
+        base_model: Model instance
+        param_grid: Dict of hyperparameters to search
+        X_train: Training features
+        y_train: Training target
+        model_name: Name for saving results
+        use_sample_weight: Whether to compute sample weights (for XGBoost)
 
     Returns:
-        best_params dict
+        Best parameters found
     """
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
 
-    grid_search = GridSearchCV(
-        estimator=model,
-        param_grid=param_grid,
-        cv=cv,
-        scoring="f1_macro",   # optimize for all 3 classes equally
-        n_jobs=-1,
-        verbose=1,
-        refit=True
-    )
-
+    # Compute sample weights if needed
+    fit_params = {}
     if use_sample_weight:
         sample_weights = compute_sample_weight(class_weight="balanced", y=y_train)
-        grid_search.fit(X_train, y_train, sample_weight=sample_weights)
-    else:
-        grid_search.fit(X_train, y_train)
+        fit_params = {"sample_weight": sample_weights}
 
-    logger.info(f"{model_name} best params: {grid_search.best_params_}")
-    logger.info(f"{model_name} best CV F1 Macro: {grid_search.best_score_:.4f}")
+    grid_search = GridSearchCV(
+        base_model,
+        param_grid,
+        cv=cv,
+        scoring="f1_macro",
+        n_jobs=-1,
+        verbose=1
+    )
 
-    # Save full results
+    logger.info(f"Running grid search for {model_name}...")
+    logger.info(f"Parameter grid: {param_grid}")
+
+    grid_search.fit(X_train, y_train, **fit_params)
+
+    logger.info(f"Best params for {model_name}: {grid_search.best_params_}")
+    logger.info(f"Best CV F1 score: {grid_search.best_score_:.4f}")
+
+    # Save results
     results_df = pd.DataFrame(grid_search.cv_results_)
-    results_df = results_df.sort_values("mean_test_score", ascending=False)
+    results_df = results_df.sort_values("rank_test_score")
     results_df.to_csv(MODELS_DIR / f"{model_name}_tuning_results.csv", index=False)
     logger.info(f"Tuning results saved to models/{model_name}_tuning_results.csv")
 
@@ -448,24 +449,38 @@ def train_all_models(
     X: pd.DataFrame,
     y: pd.Series,
     feature_names: list,
-    test_size: float = 0.2
+    test_size: float = 0.2,
+    test_indices: list = None
 ) -> pd.DataFrame:
     """
     Train all three models, compare results, save the best one.
+    
+    FIXED: 
+    - Accepts test_indices to maintain consistent splits with pipeline
+    - Saves actual feature names used by best model
 
     Parameters:
         X: Features
         y: Target
         feature_names: Feature column names
         test_size: Test split fraction
+        test_indices: Optional pre-determined test indices
 
     Returns:
         DataFrame comparing all model metrics
     """
     # Train/test split — stratified to maintain class balance
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=42, stratify=y
-    )
+    if test_indices is not None:
+        # Use provided test indices (from pipeline to prevent leakage)
+        train_indices = [i for i in range(len(X)) if i not in test_indices]
+        X_train = X.iloc[train_indices]
+        X_test = X.iloc[test_indices]
+        y_train = y.iloc[train_indices]
+        y_test = y.iloc[test_indices]
+    else:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=y
+        )
 
     logger.info(f"Train size: {len(X_train)} | Test size: {len(X_test)}")
     logger.info(f"Train severity distribution:\n{pd.Series(y_train).value_counts()}")
@@ -498,22 +513,18 @@ def train_all_models(
     models["xgboost"]["model"].set_params(**best_xgb_params)
     models["xgboost"]["params"].update(best_xgb_params)
 
-    # Override min_child_weight — tuning found 1 is best overall F1
-    # but min_child_weight=1 hurts Moderate class detection
-    # (too small leaf nodes → unstable splits on rare class)
-    # min_child_weight=5 forces more stable splits → better Moderate recall
+    # Override min_child_weight
     models["xgboost"]["model"].set_params(min_child_weight=5)
     models["xgboost"]["params"]["min_child_weight"] = 5
     logger.info("Overriding min_child_weight=5 to improve Moderate class detection")
 
-    # is_serious_ae dominates XGBoost at 90% importance due to gradient
-    # boosting's sensitivity to single dominant binary features.
-    # Remove it from XGBoost only — RF and LR use the full feature set.
+    # is_serious_ae dominates XGBoost — exclude it
     xgb_exclude = ["is_serious_ae"]
     xgb_features = [f for f in feature_names if f not in xgb_exclude]
     logger.info(f"XGBoost features (is_serious_ae excluded): {xgb_features}")
 
     results = {}
+    trained_feature_sets = {}  # Track which features each model used
 
     for model_name, model_config in models.items():
         logger.info(f"\n{'='*50}")
@@ -529,6 +540,9 @@ def train_all_models(
             X_train_model = X_train
             X_test_model  = X_test
             model_features = feature_names
+
+        # Track features used by this model
+        trained_feature_sets[model_name] = model_features
 
         metrics = train_model(
             X_train_model, X_test_model, y_train, y_test,
@@ -547,14 +561,16 @@ def train_all_models(
     logger.info(f"\nBest model: {best_model_name} (F1 Macro: {results_df.loc[best_model_name, 'f1_macro']:.4f})")
 
     # Copy best model to production path
-    import shutil
     best_model_path = MODELS_DIR / f"{best_model_name}.pkl"
     prod_model_path = MODELS_DIR / "production_model.pkl"
     shutil.copy(best_model_path, prod_model_path)
 
-    # Save feature names for inference
-    joblib.dump(feature_names, MODELS_DIR / "feature_names.pkl")
+    # FIXED: Save the ACTUAL feature names used by the best model
+    best_model_features = trained_feature_sets[best_model_name]
+    joblib.dump(best_model_features, MODELS_DIR / "feature_names.pkl")
     joblib.dump(best_model_name, MODELS_DIR / "best_model_name.pkl")
+    
+    logger.info(f"Saved production model features: {best_model_features}")
 
     results_df.to_csv(MODELS_DIR / "model_comparison.csv")
     logger.info(f"Model comparison saved to {MODELS_DIR / 'model_comparison.csv'}")
@@ -568,8 +584,8 @@ if __name__ == "__main__":
     from ingestion import load_data
     from features import get_features_and_target
 
-    df = load_data(use_synthetic=True)
-    X, y, feature_names = get_features_and_target(df)
+    df = load_data()
+    X, y, transformer = get_features_and_target(df, is_train=True)
 
-    results = train_all_models(X, y, feature_names)
+    results = train_all_models(X, y, X.columns.tolist())
     print(f"\nFinal Results:\n{results}")

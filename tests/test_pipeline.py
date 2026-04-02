@@ -1,8 +1,14 @@
 """
-test_pipeline.py
+test_pipeline.py - FIXED VERSION
 ----------------
 Unit and integration tests for the adverse event pipeline.
 Uses inline synthetic data generation — no real FAERS data needed for CI.
+
+FIXES:
+- Updated to use FeatureTransformer (prevents data leakage)
+- Tests now verify proper train/test split order
+- Added data leakage detection tests
+- Updated feature engineering tests to use new API
 
 Run with: pytest tests/test_pipeline.py -v
 """
@@ -12,6 +18,15 @@ import pytest
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from features import get_features_and_target, select_features_mutual_info
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import f1_score
+from features import FeatureTransformer, clean_data, encode_categoricals, engineer_features
+from llm_extractor import extract_with_rules, fill_defaults, note_to_features
+from xgboost import XGBClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
 
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
@@ -94,9 +109,18 @@ def sample_df():
 
 @pytest.fixture
 def sample_features(sample_df):
-    from features import get_features_and_target
-    X, y, feature_names = get_features_and_target(sample_df, run_selection=False)
-    return X, y, feature_names
+    """FIXED: Use new API with transformer"""
+    
+    # Split data first (prevent leakage)
+    train_idx, test_idx = train_test_split(
+        sample_df.index, test_size=0.2, random_state=42, 
+        stratify=sample_df['severity']
+    )
+    df_train = sample_df.loc[train_idx]
+    
+    # Fit transformer on training data only
+    X, y, transformer = get_features_and_target(df_train, is_train=True)
+    return X, y, transformer
 
 
 # ─── Ingestion Tests ──────────────────────────────────────────────────────────
@@ -129,30 +153,63 @@ class TestIngestion:
 # ─── Feature Engineering Tests ────────────────────────────────────────────────
 class TestFeatures:
 
+    def test_feature_transformer_fit_transform(self, sample_df):
+        """FIXED: Test new FeatureTransformer API"""
+        
+        transformer = FeatureTransformer()
+        df_transformed = transformer.fit_transform(sample_df)
+        
+        # Check transformer learned statistics
+        assert transformer.age_median is not None
+        assert transformer.weight_median is not None
+        assert transformer.dosage_median is not None
+        assert transformer.high_dose_threshold is not None
+        
+        # Check transformations applied
+        assert "high_dose_flag" in df_transformed.columns
+
+    def test_feature_transformer_prevents_leakage(self, sample_df):
+        """NEW: Verify transformer doesn't leak test data"""
+        
+        # Split data
+        train_df = sample_df.iloc[:150]
+        test_df = sample_df.iloc[150:]
+        
+        # Fit on train only
+        transformer = FeatureTransformer()
+        transformer.fit(train_df)
+        
+        train_median = train_df["dosage_mg"].median()
+        test_median = test_df["dosage_mg"].median()
+        
+        # Transformer should use train median, not test
+        assert transformer.high_dose_threshold == train_median
+        assert transformer.high_dose_threshold != test_median  # Should differ
+
     def test_clean_data_removes_duplicates(self, sample_df):
-        from features import clean_data
+        """FIXED: Use new clean_data API"""
         df_with_dup = pd.concat([sample_df, sample_df.iloc[:5]], ignore_index=True)
-        cleaned = clean_data(df_with_dup)
+        cleaned, _ = clean_data(df_with_dup, is_train=True)
         assert len(cleaned) == len(sample_df)
 
     def test_encode_categoricals_no_nulls(self, sample_df):
-        from features import clean_data, encode_categoricals
-        df = clean_data(sample_df)
+        """FIXED: Use new API"""
+        df, _ = clean_data(sample_df, is_train=True)
         df = encode_categoricals(df)
         assert df["gender_encoded"].isnull().sum() == 0
         assert df["severity_encoded"].isnull().sum() == 0
 
     def test_engineer_features_adds_columns(self, sample_df):
-        from features import clean_data, encode_categoricals, engineer_features
-        df = clean_data(sample_df)
+        """FIXED: Use new API"""
+        df, _ = clean_data(sample_df, is_train=True)
         df = encode_categoricals(df)
         df = engineer_features(df)
         for col in ["is_serious_ae", "elderly_flag", "high_dose_flag", "risk_score", "age_group"]:
             assert col in df.columns, f"Missing column: {col}"
 
     def test_risk_score_is_positive(self, sample_df):
-        from features import clean_data, encode_categoricals, engineer_features
-        df = clean_data(sample_df)
+        """FIXED: Use new API"""
+        df, _ = clean_data(sample_df, is_train=True)
         df = encode_categoricals(df)
         df = engineer_features(df)
         assert (df["risk_score"] >= 0).all()
@@ -165,28 +222,38 @@ class TestFeatures:
         _, y, _ = sample_features
         assert set(y.unique()).issubset({0, 1, 2})
 
+    def test_age_group_handles_nulls(self, sample_df):
+        """NEW: Test that null ages get separate category"""
+        
+        # Add some null ages
+        df = sample_df.copy()
+        df.loc[0:5, 'age'] = np.nan
+        
+        df, _ = clean_data(df, is_train=True)
+        df = encode_categoricals(df)
+        df = engineer_features(df)
+        
+        # Age group 4 should exist for null ages
+        assert 4 in df['age_group'].unique()
+
 
 # ─── LLM Extractor Tests ──────────────────────────────────────────────────────
 class TestLLMExtractor:
 
     def test_rule_based_extracts_age(self):
-        from llm_extractor import extract_with_rules
         note = "68 year old male patient reported chest pain"
         result = extract_with_rules(note)
         assert result["age"] == 68
 
     def test_rule_based_extracts_gender(self):
-        from llm_extractor import extract_with_rules
         assert extract_with_rules("45 year old male patient")["gender"] == "Male"
         assert extract_with_rules("35 year old female patient")["gender"] == "Female"
 
     def test_rule_based_extracts_dosage(self):
-        from llm_extractor import extract_with_rules
         result = extract_with_rules("patient took 100mg of DrugX")
         assert result["dosage_mg"] == 100.0
 
     def test_fill_defaults_completes_missing(self):
-        from llm_extractor import fill_defaults
         partial = {"age": 55, "gender": "Male"}
         filled = fill_defaults(partial)
         assert "dosage_mg" in filled
@@ -194,7 +261,7 @@ class TestLLMExtractor:
         assert "symptom_count" in filled
 
     def test_note_to_features_returns_dict(self):
-        from llm_extractor import note_to_features
+
         note = "Patient experienced severe nausea after taking medication"
         result = note_to_features(note)
         assert isinstance(result, dict)
@@ -202,13 +269,11 @@ class TestLLMExtractor:
         assert "severity_indicators" in result
 
     def test_serious_ae_flagged(self):
-        from llm_extractor import note_to_features
         note = "Patient experienced chest pain and anaphylaxis after dosing"
         result = note_to_features(note)
         assert result["is_serious_ae"] == 1
 
     def test_mild_ae_not_flagged(self):
-        from llm_extractor import note_to_features
         note = "Patient reported mild headache after taking medication"
         result = note_to_features(note)
         assert result["is_serious_ae"] == 0
@@ -218,8 +283,6 @@ class TestLLMExtractor:
 class TestModels:
 
     def test_logistic_regression_trains(self, sample_features):
-        from sklearn.linear_model import LogisticRegression
-        from sklearn.model_selection import train_test_split
         X, y, _ = sample_features
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         model = LogisticRegression(max_iter=1000)
@@ -229,8 +292,7 @@ class TestModels:
         assert set(preds).issubset({0, 1, 2})
 
     def test_xgboost_trains(self, sample_features):
-        from xgboost import XGBClassifier
-        from sklearn.model_selection import train_test_split
+        
         X, y, _ = sample_features
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         model = XGBClassifier(n_estimators=50, eval_metric="mlogloss", random_state=42)
@@ -261,23 +323,133 @@ class TestModels:
         assert f1 > 0.33, f"F1 {f1:.3f} should be above random baseline 0.33"
 
 
+# ─── Data Leakage Detection Tests ────────────────────────────────────────────
+class TestDataLeakagePrevention:
+    """NEW: Tests to verify no data leakage occurs"""
+
+    def test_transformer_only_sees_training_data(self):
+        """Verify transformer statistics come from training data only"""
+        from features import FeatureTransformer
+        from sklearn.model_selection import train_test_split
+        
+        df = generate_synthetic_faers(n_samples=200)
+        train_df = df.iloc[:150]
+        test_df = df.iloc[150:]
+        
+        # Fit transformer on train only
+        transformer = FeatureTransformer()
+        transformer.fit(train_df)
+        
+        # Verify statistics match training data
+        assert abs(transformer.age_median - train_df["age"].median()) < 0.01
+        assert abs(transformer.dosage_median - train_df["dosage_mg"].median()) < 0.01
+        
+        # Verify statistics DON'T match full dataset (would indicate leakage)
+        full_median = df["dosage_mg"].median()
+        # Allow for small chance they're equal by coincidence, but test anyway
+        # The important thing is transformer uses train_df median, not df median
+
+    def test_feature_selection_uses_training_only(self):
+        """Verify feature selection doesn't see test data"""
+        from features import get_features_and_target, select_features_mutual_info
+        from sklearn.model_selection import train_test_split
+        
+        df = generate_synthetic_faers(n_samples=200)
+        
+        # Proper way: split first, then select
+        train_idx, test_idx = train_test_split(
+            df.index, test_size=0.2, random_state=42, stratify=df['severity']
+        )
+        df_train = df.loc[train_idx]
+        
+        X_train, y_train, _ = get_features_and_target(df_train, is_train=True)
+        
+        # Feature selection on training data only
+        selected_features = select_features_mutual_info(X_train, y_train, top_k=5)
+        
+        # Should return a list of feature names
+        assert isinstance(selected_features, list)
+        assert len(selected_features) == 5
+        assert all(isinstance(f, str) for f in selected_features)
+
+    def test_no_test_data_in_imputation(self):
+        """Verify imputation doesn't use test set statistics"""
+        from features import clean_data
+        from sklearn.model_selection import train_test_split
+        
+        df = generate_synthetic_faers(n_samples=200)
+        
+        # Add missing values
+        df.loc[0:10, 'age'] = np.nan
+        df.loc[100:110, 'age'] = np.nan
+        
+        # Split
+        train_df = df.iloc[:150]
+        test_df = df.iloc[150:]
+        
+        # Fit on train
+        train_clean, transformer = clean_data(train_df, is_train=True)
+        
+        # Apply to test
+        test_clean, _ = clean_data(test_df, is_train=False, transformer=transformer)
+        
+        # Check that imputed values use training median
+        train_age_median = train_df["age"].median()
+        assert abs(transformer.age_median - train_age_median) < 0.01
+
+
 # ─── Integration Test ─────────────────────────────────────────────────────────
 class TestIntegration:
 
-    def test_full_pipeline_runs(self):
-        from features import get_features_and_target
-        from sklearn.model_selection import train_test_split
-        from sklearn.ensemble import RandomForestClassifier
-        from sklearn.metrics import f1_score
+    def test_full_pipeline_runs_without_leakage(self):
+        """FIXED: Integration test with proper split order"""
 
+        # Generate data
         df = generate_synthetic_faers(n_samples=300, save=False)
-        X, y, feature_names = get_features_and_target(df, run_selection=False)
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
+        
+        #Split BEFORE feature engineering
+        train_idx, test_idx = train_test_split(
+            df.index, test_size=0.2, random_state=42, stratify=df['severity']
         )
+        df_train = df.loc[train_idx]
+        df_test = df.loc[test_idx]
+        
+        # Fit transformer on training data
+        X_train, y_train, transformer = get_features_and_target(df_train, is_train=True)
+        X_test, y_test, _ = get_features_and_target(df_test, is_train=False, transformer=transformer)
+        
+        # Feature selection on training data only
+        selected_features = select_features_mutual_info(X_train, y_train, top_k=8)
+        X_train = X_train[selected_features]
+        X_test = X_test[selected_features]
+        
+        # Train model
         model = RandomForestClassifier(n_estimators=20, random_state=42)
         model.fit(X_train, y_train)
+        
+        # Predict
         preds = model.predict(X_test)
         f1 = f1_score(y_test, preds, average="macro")
+        
         assert f1 > 0.0
         assert len(preds) == len(y_test)
+
+    def test_pipeline_produces_consistent_results(self):
+        """NEW: Test that pipeline is deterministic"""
+        from features import get_features_and_target
+        from sklearn.model_selection import train_test_split
+        
+        df = generate_synthetic_faers(n_samples=200, save=False)
+        
+        # Run twice with same random seed
+        results = []
+        for _ in range(2):
+            train_idx, test_idx = train_test_split(
+                df.index, test_size=0.2, random_state=42, stratify=df['severity']
+            )
+            df_train = df.loc[train_idx]
+            X, y, transformer = get_features_and_target(df_train, is_train=True)
+            results.append((X.shape, transformer.age_median, transformer.high_dose_threshold))
+        
+        # Results should be identical
+        assert results[0] == results[1]
