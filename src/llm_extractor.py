@@ -1,17 +1,12 @@
 """
 llm_extractor.py
 ----------------
-Uses Mistral AI (via      ) to extract structured fields
+Uses Mistral AI to extract structured fields
 from unstructured clinical notes.
 
 Flow:
     Unstructured note → Mistral LLM → Structured JSON → ML Classifier → Severity Prediction
 
-Config (set in .env):
-    MISTRAL_API_KEY   - your   API key
-    MISTRAL_BASE_URL  - your_api_base_url
-    MISTRAL_MODEL     - your_llm_model_url
-    MISTRAL_CERT_PATH - path to your SSL certificate .pem file
 """
 
 import os

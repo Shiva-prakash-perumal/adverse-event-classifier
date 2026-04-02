@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import joblib
 import logging
+import sys
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -23,6 +24,9 @@ from sklearn.metrics import (
     roc_curve, auc, precision_recall_curve,
     brier_score_loss
 )
+from ingestion import load_data
+from features import get_features_and_target
+from sklearn.model_selection import train_test_split
 from sklearn.calibration import calibration_curve
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -242,14 +246,10 @@ def full_evaluation(
 
 
 if __name__ == "__main__":
-    import sys
     sys.path.append(str(Path(__file__).parent))
-    from ingestion import load_data
-    from features import get_features_and_target
-    from sklearn.model_selection import train_test_split
 
-    df = load_data(use_synthetic=True)
-    X, y, feature_names = get_features_and_target(df)
+    df = load_data()
+    X, y, transformer = get_features_and_target(df, is_train=True)
     _, X_test, _, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
     model, feature_names, model_name = load_production_model()

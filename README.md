@@ -84,7 +84,7 @@ FDA FAERS Data (4 quarters: 25Q1–25Q4)
          ↓
     LLM Extraction Layer
     (llm_extractor.py)
-    - Mistral AI via      
+    - Mistral AI    
     - Rule-based regex fallback
          ↓
     Streamlit Prototype
@@ -258,7 +258,7 @@ Used at inference time to extract structured features from free-text clinical no
                     Severity: Severe (87.3%)
 ```
 
-**Fallback chain:** Mistral AI (     ) → Rule-based regex extractor
+**Fallback chain:** Mistral AI → Rule-based regex extractor
 
 Configure in `.env`:
 ```
@@ -300,7 +300,7 @@ View results: `mlflow ui` → http://localhost:5000
 | Category | Tools |
 |---|---|
 | ML & Modeling | scikit-learn, XGBoost, GridSearchCV |
-| LLM & AI | Mistral AI (     ), LangChain |
+| LLM & AI | Mistral AI, LangChain |
 | Data | Pandas, NumPy — 919K real FAERS records |
 | Feature Selection | Mutual Information, RFE |
 | MLOps | MLflow, Docker, GitHub Actions |
