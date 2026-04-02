@@ -1,5 +1,5 @@
 """
-evaluate.py - FIXED VERSION
+evaluate.py
 -----------
 Deep evaluation of trained models beyond basic accuracy.
 
