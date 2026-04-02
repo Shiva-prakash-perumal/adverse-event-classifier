@@ -1,5 +1,5 @@
 """
-test_pipeline.py - FIXED VERSION
+test_pipeline.py
 ----------------
 Unit and integration tests for the adverse event pipeline.
 Uses inline synthetic data generation — no real FAERS data needed for CI.

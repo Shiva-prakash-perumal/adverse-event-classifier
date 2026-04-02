@@ -57,7 +57,7 @@ def run_pipeline():
     # Step 1: Load data
     # ══════════════════════════════════════════════════════════════════════════
     logger.info("\nStep 1: Loading data...")
-    df = load_data()  # FIXED: Removed use_synthetic parameter
+    df = load_data()
     logger.info(f"Loaded {len(df)} records")
 
     # ══════════════════════════════════════════════════════════════════════════

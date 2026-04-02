@@ -84,7 +84,7 @@ FDA FAERS Data (4 quarters: 25Q1–25Q4)
          ↓
     LLM Extraction Layer
     (llm_extractor.py)
-    - Mistral AI via      
+    - Mistral AI    
     - Rule-based regex fallback
          ↓
     Streamlit Prototype
