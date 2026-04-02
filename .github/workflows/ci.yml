@@ -163,19 +163,52 @@ jobs:
           import sys
           sys.path.append('src')
 
-          from features import get_features_and_target
+          from features import get_features_and_target, select_features_mutual_info, select_features_rfe
           from train import train_all_models
           import pandas as pd
+          from sklearn.model_selection import train_test_split
 
+          # Load synthetic data
           df = pd.read_csv("data/faers_synthetic.csv")
           df["severity"] = df["severity"].astype(str)
           print(f"Loaded {len(df)} synthetic records")
 
-          X, y, feature_names = get_features_and_target(df, run_selection=False)
-          print(f"Features: {feature_names}")
-          print(f"X shape: {X.shape}")
+          # FIXED: Split data BEFORE feature engineering
+          train_idx, test_idx = train_test_split(
+              df.index, test_size=0.2, random_state=42, stratify=df['severity']
+          )
+          df_train = df.loc[train_idx]
+          df_test = df.loc[test_idx]
 
-          results = train_all_models(X, y, feature_names)
+          # Fit transformer on training data only
+          X_train, y_train, transformer = get_features_and_target(df_train, is_train=True)
+          X_test, y_test, _ = get_features_and_target(df_test, is_train=False, transformer=transformer)
+
+          # Feature selection on training data only
+          mi_features = select_features_mutual_info(X_train, y_train, top_k=12)
+          X_train_mi = X_train[mi_features]
+          X_test_mi = X_test[mi_features]
+
+          final_features = select_features_rfe(X_train_mi, y_train, n_features=10)
+          X_train_final = X_train[final_features]
+          X_test_final = X_test[final_features]
+
+          print(f"Features: {final_features}")
+          print(f"X_train shape: {X_train_final.shape}")
+          print(f"X_test shape: {X_test_final.shape}")
+
+          # Combine for train_all_models
+          X_combined = pd.concat([X_train_final, X_test_final], ignore_index=True)
+          y_combined = pd.concat([y_train, y_test], ignore_index=True)
+          new_test_indices = list(range(len(X_train_final), len(X_combined)))
+
+          results = train_all_models(
+              X_combined, 
+              y_combined, 
+              final_features,
+              test_size=0.2,
+              test_indices=new_test_indices
+          )
           print(f"\nTraining Results:\n{results}")
           EOF
 
